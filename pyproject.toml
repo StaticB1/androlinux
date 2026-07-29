@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "androlinux"
+version = "0.1.0"
+description = "Run a full Linux userspace natively on an Android kernel — no virtualisation"
+requires-python = ">=3.10"
+license = "MIT"
+readme = "README.md"
+keywords = ["android", "linux", "chroot", "adb", "ubuntu", "debian"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: Android",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.scripts]
+androlinux = "androlinux.cli:main"
+alx = "androlinux.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["androlinux*"]
+
+[tool.setuptools.package-data]
+androlinux = ["scripts/*.sh"]

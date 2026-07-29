@@ -1,0 +1,27 @@
+# Kernel work: source trees, worktrees and build output.
+# ~10 GB, all reproducible — kernel/build-kernel.sh prints the git clone to run.
+kernel/common/
+kernel/common-*/
+kernel/build/
+kernel/build-matched/
+kernel/*.log
+
+# Host-side download cache, if anyone points ANDROLINUX_CACHE here
+*.tar.xz
+*.tar.gz
+*.part
+*.apk
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Screenshots people generate while testing
+androlinux-desktop.png
+*.local.*
