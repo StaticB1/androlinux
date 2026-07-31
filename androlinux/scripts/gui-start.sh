@@ -21,10 +21,26 @@ command -v Xvnc >/dev/null 2>&1 || {
   echo "Xvnc not installed — run 'androlinux gui install' first" >&2; exit 1
 }
 
-# /etc/machine-id and /run/dbus are prepared by gui.py before this runs, because
-# they need root while the session itself should not. See gui._prepare_session.
-if [ ! -s /etc/machine-id ]; then
-  echo "/etc/machine-id is missing — dbus will not start, so XFCE will not either" >&2
+# /etc/machine-id, /run/dbus and the D-Bus *system* bus are prepared by up.sh,
+# which every start path runs — host, boot hook and on-device. They were once
+# prepared by gui.py instead, which meant only the host path got them and starting
+# from the tablet produced a session with no system bus. See FINDINGS K1.
+#
+# This is a guard, not the setup. Note it checks the *content*: Ubuntu ships
+# /etc/machine-id containing the literal word "uninitialized" for systemd to
+# replace on first boot, and with no systemd nothing replaces it. A `-s` test
+# passes that happily, then D-Bus rejects it —
+#   UUID file '/etc/machine-id' should contain a hex string of length 32
+# — and the session dies with "Oh no! Something has gone wrong". See FINDINGS K2.
+_mid=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || echo "")
+case "$_mid" in
+  *[!0-9a-f]*|"") _mid_ok=no ;;
+  *) [ ${#_mid} -eq 32 ] && _mid_ok=yes || _mid_ok=no ;;
+esac
+if [ "$_mid_ok" != yes ]; then
+  echo "/etc/machine-id is not a valid 32-char hex UUID (got '${_mid:-<empty>}')." >&2
+  echo "dbus will refuse to start, and so will the desktop." >&2
+  echo "Run 'androlinux up' to regenerate it." >&2
   exit 1
 fi
 
