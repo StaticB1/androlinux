@@ -29,9 +29,14 @@ Verified on two targets:
 | Guest | Debian 12 amd64 | Debian 12 + **Ubuntu 24.04.4** arm64 |
 
 End state on the tablet: Ubuntu 24.04.4 LTS arm64 matching the host workstation
-release-for-release, XFCE at 2560×1600 shown on the tablet's own screen, running as
-a normal user, surviving reboots unattended, startable from the device with no host
-attached.
+release-for-release, with **Ubuntu's own GNOME desktop** — Yaru, dash-to-panel, the
+user's extensions copied across from their workstation — shown on the tablet's own
+screen, running as a normal user, reachable over SSH, surviving reboots unattended,
+and startable from the device with no host attached. Real Firefox as a .deb, since
+Ubuntu ships it only as a snap and snapd needs systemd.
+
+Also on the tablet: a 120 GB sparse rootfs and the user's 18.75 GB of repositories,
+rsynced over the adb-forwarded SSH at 32.7 MB/s.
 
 ---
 
