@@ -66,7 +66,19 @@ SESSIONS = {
             "yaru-theme-gtk", "yaru-theme-icon", "yaru-theme-gnome-shell",
             "fonts-ubuntu", "gnome-shell-extension-ubuntu-dock",
         ),
-        "command": "gnome-session --session=ubuntu",
+        # gnome-shell directly, NOT `gnome-session`. gnome-session supervises its
+        # children through GLib child watches, which use pidfd; waitid(P_PIDFD)
+        # needs Linux >= 5.4 and Samsung's kernel is 4.19 while still providing
+        # pidfd_open, so GLib takes the pidfd path and fails:
+        #
+        #   GLib-WARNING: waitid(pid:17361, pidfd=11) failed: Invalid argument (22)
+        #
+        # gnome-session then never brings the shell up, and the user gets "Oh no!
+        # Something has gone wrong" or a black screen with a healthy Xvnc behind
+        # it. gnome-shell launched directly is unaffected and gives a working
+        # desktop; what is lost is gnome-session's own service management, which
+        # was never going to work here anyway.
+        "command": "gnome-shell --x11",
         "proc": "gnome-shell",
         "env": (
             "export XDG_CURRENT_DESKTOP=ubuntu:GNOME\n"

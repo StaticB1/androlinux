@@ -57,6 +57,34 @@ say "session command: $ALX_SESSION_CMD"
 # Xtigervnc keeps TCP 5901, the replacement cannot bind, and the caller waits out
 # the full 45s poll below before failing — with the original session now
 # unreachable over its socket as well.
+# Kill the session's *components*, not just its X server, before starting a new
+# one. `vncserver -kill` stops Xvnc and nothing else: gnome-session, the session
+# dbus-daemon and the keyring daemons are reparented and survive it. They then
+# hold D-Bus names the next session needs —
+#   tracker-miner-fs-3: Could not request DBus name ... already taken
+# — so gnome-shell exits and the user gets a black screen or "Oh no! Something has
+# gone wrong", with a perfectly healthy Xvnc in front of it.
+#
+# Named explicitly rather than `pkill -u`, because the session user may also own an
+# ssh login or a running build that must not be killed. Note this runs AS the
+# session user, so pkill cannot reach the root-owned D-Bus *system* bus even by
+# accident — but the guard is here in case the session ever runs as root.
+kill_session_components() {
+  for _p in gnome-shell gnome-session-binary gnome-settings-daemon gsd-media-keys \
+            xdg-desktop-portal xdg-desktop-portal-gnome xdg-permission-store \
+            gnome-keyring-daemon tracker-miner-fs-3 tracker-extract-3 \
+            evolution-source-registry evolution-calendar-factory \
+            evolution-addressbook-factory update-notifier at-spi-bus-launcher \
+            xfce4-session xfwm4 xfce4-panel xfdesktop dbus-launch; do
+    pkill -x "$_p" 2>/dev/null || true
+  done
+  # Session buses only. Never as root, or this would take out the system bus.
+  if [ "$(id -u)" != "0" ]; then
+    pkill -x dbus-daemon 2>/dev/null || true
+  fi
+  sleep 2
+}
+
 N=${ALX_DISPLAY#:}
 PORT=$((5900 + N))
 
@@ -102,10 +130,25 @@ if port_open && ours; then
   done
 
   if port_open; then
+    # vncserver -kill missed it — its pidfile goes stale, and a session started by
+    # a different user is invisible to it. Try directly before giving up.
+    say "vncserver -kill did not stop it; signalling Xtigervnc directly"
+    pkill -x Xtigervnc 2>/dev/null || true
+    i=0
+    while [ $i -lt 8 ]; do
+      port_open || break
+      sleep 1
+      i=$((i + 1))
+    done
+  fi
+
+  if port_open; then
     echo "an X server still holds $ALX_DISPLAY (port $PORT);" >&2
-    echo "refusing to unlink its socket — kill it by hand if it is really stale" >&2
+    echo "refusing to unlink its socket — it may belong to another user." >&2
+    echo "Find it with:  androlinux run 'ps -eo user,pid,comm | grep Xtigervnc'" >&2
     exit 1
   fi
+  kill_session_components
 fi
 
 # A socket with nothing listening behind it is genuinely stale — from a hard
@@ -113,6 +156,12 @@ fi
 if [ -e "/tmp/.X11-unix/X$N" ] || [ -e "/tmp/.X$N-lock" ]; then
   rm -f "/tmp/.X$N-lock" "/tmp/.X11-unix/X$N" 2>/dev/null || true
   say "cleared a stale session on $ALX_DISPLAY"
+fi
+
+_leftovers=$(pgrep -x gnome-session-binary 2>/dev/null | wc -l)
+if [ "${_leftovers:-0}" -gt 0 ] || pgrep -x dbus-launch >/dev/null 2>&1; then
+  say "clearing leftover session processes from a previous run"
+  kill_session_components
 fi
 
 # setsid is load-bearing, not decoration. `adb shell` waits for the whole

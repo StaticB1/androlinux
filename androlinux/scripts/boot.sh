@@ -47,11 +47,25 @@ fi
 
 if [ "$ALX_START_GUI" = "1" ]; then
   if [ -x "$ALX_ROOT/chroot-exec" ]; then
+    # Run the session as the recorded user, exactly as the host path does. Starting
+    # it as root here was a real divergence: the two paths then produced sessions
+    # owned by different users, so `vncserver -kill` — which finds its target
+    # through $HOME/.vnc/<host>:N.pid — could not see the other one's pidfile, and
+    # restarting refused to proceed. Beyond that, GNOME wants a real home and
+    # several apps refuse to run as root at all.
+    _user=$(cat "$ALX_ROOT/default-user" 2>/dev/null || echo "")
     # setsid, or the session's X server keeps this hook alive forever and Android
     # waits on it during boot.
-    setsid sh "$ALX_ROOT/chroot-exec" /bin/bash /usr/local/sbin/androlinux-gui-start \
-      </dev/null >> "$LOG" 2>&1 &
-    log "desktop session starting in the background"
+    if [ -n "$_user" ]; then
+      log "starting the desktop as $_user"
+      setsid sh "$ALX_ROOT/chroot-exec" /bin/su - "$_user" \
+        -c 'bash /usr/local/sbin/androlinux-gui-start' \
+        </dev/null >> "$LOG" 2>&1 &
+    else
+      log "starting the desktop as root (no default user recorded)"
+      setsid sh "$ALX_ROOT/chroot-exec" /bin/bash /usr/local/sbin/androlinux-gui-start \
+        </dev/null >> "$LOG" 2>&1 &
+    fi
   else
     log "cannot start the desktop: $ALX_ROOT/chroot-exec is missing"
   fi

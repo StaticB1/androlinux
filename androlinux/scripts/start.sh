@@ -26,7 +26,15 @@ fi
 # screen widget runs this on every tap, and most taps happen when the desktop is
 # already there and the user simply wants to look at it again. Doing anything
 # more than raising the viewer here risks disturbing a working session.
-if grep -q " $ALX_ROOT/mnt " /proc/mounts && pgrep -x Xtigervnc >/dev/null 2>&1; then
+# A live X server is not sufficient: the session inside it can be dead — a
+# gnome-shell that exited leaves Xvnc running and shows "Oh no! Something has
+# gone wrong." Short-circuiting on the X server alone meant re-running this could
+# never repair that. Require a compositor too, or fall through and rebuild.
+session_alive() {
+  pgrep -x gnome-shell >/dev/null 2>&1 || pgrep -x xfwm4 >/dev/null 2>&1
+}
+if grep -q " $ALX_ROOT/mnt " /proc/mounts && pgrep -x Xtigervnc >/dev/null 2>&1 \
+   && session_alive; then
   echo "  already running — opening the viewer"
   am start -a android.intent.action.VIEW -d "$ALX_VNC_URI" >/dev/null 2>&1 \
     && echo "androlinux: ready" \

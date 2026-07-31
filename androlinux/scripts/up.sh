@@ -184,6 +184,83 @@ exec chroot "$ALX_MNT" /usr/bin/env -i \\
 EOF
 chmod 755 "$ALX_ROOT/chroot-exec"
 
+# ------------------------------------------------- session prerequisites
+# These live HERE, in the device-side script, because every path that starts a
+# desktop goes through `up` — the host's `gui start`, the Magisk boot hook, and
+# the on-device `start`. They were previously done by the host-side Python only,
+# so starting from the tablet produced a GNOME session with no D-Bus system bus:
+# gnome-shell died instantly and the user got "Oh no! Something has gone wrong."
+# One copy, in the one place all three paths share.
+cat > "$ALX_MNT/usr/local/sbin/androlinux-session-prep" <<'PREP'
+#!/bin/bash
+# Root-only session prerequisites. Runs inside the rootfs. Idempotent.
+set -u
+
+# dbus refuses to start without a machine id, and nothing generates one in a
+# rootfs that has never run an init.
+#
+# The CONTENT must be checked, not merely the file's presence or size. Ubuntu's
+# systemd package ships /etc/machine-id containing the literal word
+# "uninitialized" — 13 characters, which systemd would replace on first boot. With
+# no systemd nothing replaces it, and a `[ ! -s ]` test sees a non-empty file and
+# skips generation. D-Bus then refuses to work at all:
+#
+#   D-Bus library appears to be incorrectly set up: UUID file '/etc/machine-id'
+#   should contain a hex string of length 32, not length 13
+#
+# which leaves gnome-shell unable to start while everything else looks healthy.
+machine_id_valid() {
+  [ -f /etc/machine-id ] || return 1
+  _id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null)
+  [ ${#_id} -eq 32 ] || return 1
+  case "$_id" in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+  return 0
+}
+
+if ! machine_id_valid; then
+  if command -v dbus-uuidgen >/dev/null 2>&1; then
+    dbus-uuidgen > /etc/machine-id
+  else
+    tr -d - < /proc/sys/kernel/random/uuid > /etc/machine-id
+  fi
+  machine_id_valid && echo "generated a valid /etc/machine-id" \
+    || echo "WARNING: /etc/machine-id is still invalid — dbus will not work"
+fi
+# /var/lib/dbus/machine-id must agree; a stale copy is checked independently.
+rm -f /var/lib/dbus/machine-id
+mkdir -p /var/lib/dbus
+ln -sf /etc/machine-id /var/lib/dbus/machine-id
+
+mkdir -p /run/dbus /var/run/dbus
+
+# The D-Bus SYSTEM bus. systemd normally starts dbus.service; with no systemd
+# nothing does. XFCE never notices — it only needs the session bus dbus-launch
+# provides — but GNOME Shell cannot start without the system bus.
+if ! pgrep -f 'dbus-daemon --system' >/dev/null 2>&1; then
+  dbus-daemon --system --fork && echo "started the D-Bus system bus"
+fi
+
+# Also systemd units on a stock Ubuntu. GNOME asks these for the user list and
+# for privilege checks.
+for svc in /usr/libexec/accounts-daemon /usr/lib/polkit-1/polkitd; do
+  [ -x "$svc" ] || continue
+  name=$(basename "$svc")
+  pgrep -x "$name" >/dev/null 2>&1 && continue
+  setsid "$svc" </dev/null >/dev/null 2>&1 &
+  echo "started $name"
+done
+exit 0
+PREP
+chmod 755 "$ALX_MNT/usr/local/sbin/androlinux-session-prep"
+
+if [ -x "$ALX_ROOT/chroot-exec" ]; then
+  _prep=$("$ALX_ROOT/chroot-exec" /bin/bash /usr/local/sbin/androlinux-session-prep 2>&1)
+  [ -n "$_prep" ] && printf '  %s\n' "$_prep"
+  say "session prerequisites ready (dbus system bus, machine-id)"
+fi
+
 # sshd, if it was enabled. /run is a fresh tmpfs on every `up`, so its
 # privilege-separation directory has to be recreated each time — this cannot be a
 # one-off step at enable time.
