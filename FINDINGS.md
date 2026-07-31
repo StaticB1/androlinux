@@ -616,6 +616,84 @@ pool. GNOME plus a browser on a 8 GB tablet shared with a live Android userspace
 genuinely tight — which is the honest argument for `--session xfce` if
 responsiveness matters more than matching the workstation pixel for pixel.
 
+## K. GNOME failing to start from the device, but not from the host
+
+Reported as: "my linux on the tab is not starting" with GNOME's
+*Oh no! Something has gone wrong* screen. Three faults stacked, and every one of
+them left a **healthy Xvnc** with a dead session in front of it — so every
+liveness check said things were fine.
+
+### K1. The D-Bus system bus was only started by the host *(my bug)*
+Section I2 established that GNOME needs a hand-started D-Bus system bus. I put
+that in `gui.py`, host-side. But three paths start a desktop — `gui start` from
+the host, the Magisk boot hook, and the on-device `start` — and only the first ran
+that code. Starting from the tablet produced a session with no system bus, which
+is exactly the *Oh no!* screen.
+
+```
+dbus-daemon --system:          NOT RUNNING
+/run/dbus/system_bus_socket:   does not exist
+```
+
+It now lives in `up.sh`, the one thing all three paths share. **The lesson is
+structural: if two code paths must do the same thing, they have to execute the same
+code, not equivalent code.**
+
+### K2. `/etc/machine-id` contained the word "uninitialized" *(my bug)*
+```
+$ cat /etc/machine-id        →  uninitialized     (14 bytes)
+D-Bus library appears to be incorrectly set up: UUID file '/etc/machine-id'
+should contain a hex string of length 32, not length 13
+```
+Ubuntu's systemd package ships that placeholder for systemd to replace on first
+boot. With no systemd, nothing replaces it — and the guard was
+`[ ! -s /etc/machine-id ]`, *is it empty*, which a placeholder passes happily.
+D-Bus then refuses to initialise and gnome-shell cannot start.
+
+Now validated by **content**: exactly 32 characters, hex only, else regenerate.
+Existence and non-emptiness are not validity.
+
+### K3. `gnome-session` cannot work on a 4.19 kernel *(not my bug)*
+```
+GLib-WARNING: waitid(pid:17361, pidfd=11) failed: Invalid argument (22)
+```
+`gnome-session` supervises its children through GLib child watches, which use
+pidfd. `waitid(P_PIDFD)` needs Linux ≥ 5.4. Samsung's kernel is **4.19** — but it
+*does* provide `pidfd_open`, so GLib takes the pidfd path and then fails on the
+wait. The shell is never brought up.
+
+The worst kind of version mismatch: not "too old to support it", but old enough to
+offer half of it. Had `pidfd_open` been absent, GLib would have fallen back to
+SIGCHLD and worked.
+
+`gnome-shell --x11` launched directly is unaffected and gives a full working
+desktop, so that is what the `gnome` session runs. What is lost is
+gnome-session's own service management — which needs systemd here anyway.
+
+### K4. Teardown did not tear down *(my bug)*
+`vncserver -kill` stops Xvnc and nothing else. `gnome-session`, the session
+`dbus-daemon` and the keyring daemons are reparented and survive it, then hold
+D-Bus names the next session needs:
+```
+tracker-miner-fs-3: Could not request DBus name ... already taken
+```
+Found four orphaned `gnome-keyring-daemon`s and two session buses. Components are
+now killed by name — deliberately not `pkill -u`, since the session user may also
+own an ssh login or a running build.
+
+### K5. The two paths ran the session as different users *(my bug)*
+The boot hook started the desktop as **root**; the host path as the recorded
+**user**. `vncserver -kill` locates its target via `$HOME/.vnc/<host>:N.pid`, so
+each was invisible to the other, and restarting refused to proceed — correctly,
+since the anti-stranding guard could not prove the old server was gone.
+
+### K6. And the check that hid all of it *(my bug)*
+The on-device `start` short-circuited on "rootfs mounted + X server alive" and
+reported `already running — opening the viewer`. With a dead session inside a live
+X server, that is a false positive, and it meant **re-running the thing you would
+naturally re-run could never repair the fault.** It now requires a live compositor
+too, and falls through to rebuild otherwise.
+
 ## Also worth recording
 
 **The emulator AVD had to be recreated.** The original used a
@@ -653,6 +731,8 @@ having verified anything.**
 - `pgrep` finding nothing because it was not allowed to look (F2)
 - a port probe that could never succeed, so every port looked free (F3)
 - a display recorded from a run that never worked, then trusted forever (F4)
+- a placeholder file passing an "is it empty?" test (K2)
+- a live X server standing in for a live session (K6)
 
 The fix is the same each time and is now the house style: **verify the
 postcondition, not the exit status.** `install` checks the image and rootfs exist.
